@@ -1,0 +1,148 @@
+service: ordering-system
+frameworkVersion: '2'
+
+plugins:
+  - serverless-iam-roles-per-function
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  region: us-east-1
+  lambdaHashingVersion: 20201221
+  iamRoleStatements: 
+    - Effect: Allow
+      Action:
+        - dynamoDb:PutItem
+        - dynamoDb:GetItem
+      Resource:
+        - arn:aws:dynamodb:${self:provider.region}:${aws:accountId}:table/ordersTable
+
+    - Effect: Allow
+      Action: 
+        - kinesis:PutRecord
+      Resource:
+         - arn:aws:kinesis:${self:provider.region}:${aws:accountId}:stream/order-events
+
+    - Effect: Allow
+      Action: 
+        - ses:SendEmail
+      Resource:
+        - "*"
+      Condition:
+        StringEquals:
+          ses:FromAddress:
+            - zppxxagv-ordering-system@grr.la
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+      Resource:
+         - arn:aws:sqs:${self:provider.region}:${aws:accountId}:deliveryServiceQueue
+         - arn:aws:sqs:${self:provider.region}:${aws:accountId}:customerServiceQueue
+
+  environment:
+    region: ${self:provider.region}
+    ordersTableName: ordersTable
+    ordersStreamName: order-events
+
+
+functions:
+  # HTTP call to notify that new order should be placed
+  createOrder:
+    handler: src/order-create.handle
+    events:
+      - http:
+          path: /order
+          method: post
+
+  # HTTP call to notify that order was fulfilled and can be delivered
+  orderFulfilled:
+    handler: src/order-fulfilled.handle
+    events:
+      - http:
+          path: /order/fulfilled
+          method: post
+
+  # HTTP call to notify that order was delivered
+  orderDelivered:
+    handler: src/order-delivered.handle
+    events:
+      - http:
+          path: /order/delivered
+          method: post
+    environment:
+      customerServiceQueue: 
+        Ref: customerServiceQueue
+
+  # For new order, sends email to producer to start working on product
+  notifyProducer:
+    handler: src/producer-notify.handle
+    events:
+      - stream:
+          arn: arn:aws:kinesis:${self:provider.region}:${aws:accountId}:stream/order-events
+    environment:
+      producerEmail: 	zppxxagv-producer@grr.la
+      orderingSystemEmail: zppxxagv-ordering-system@grr.la
+
+  # Updates order prepared for delivery and sends to SQS
+  orderSendToDelivery:
+    handler: src/order-send-to-delivery.handle
+    events:
+      - stream:
+          arn: arn:aws:kinesis:${self:provider.region}:${aws:accountId}:stream/order-events
+    environment:
+      deliveryQueue: 
+        Ref: deliveryServiceQueue
+
+  # Send message to delivery system to deliver items from fulfilled order
+  notifyDeliveryService:
+    handler: src/delivery-service-notify.handle
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - deliveryServiceQueue
+              - Arn
+          batchSize: 1
+
+  # Send message to customer support service with order review points
+  notifyCustomerService:
+    handler: src/customer-service-notify.handle
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - customerServiceQueue
+              - Arn
+          batchSize: 1
+
+
+resources:
+  Resources:
+
+    orderEventsStream:
+      Type: AWS::Kinesis::Stream
+      Properties:
+        Name: order-events
+        ShardCount: 1
+
+    ordersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ordersTable
+        AttributeDefinitions:
+          - AttributeName: orderId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: orderId
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+
+    deliveryServiceQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: deliveryServiceQueue
+
+    customerServiceQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: customerServiceQueue
