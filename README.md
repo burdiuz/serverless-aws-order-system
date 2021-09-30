@@ -6,7 +6,7 @@ After deployment it will expose three API endpoints.
  * **POST /order/fulfilled** -- expects to contain a JSON object in body with fields `{ orderId, fulfillmentId }`
  * **POST /order/delivered** -- expects to contain a JSON object in body with fields `{ orderId, deliveryCompanyId, orderReview }`
  
- All the fields may contain information in free form, except of `orderId`, where applicable -- must be a string and ID of existing order in DynamoDB.
+ All the fields may contain information in free form, except of `orderId`, where applicable -- must be a string and ID of existing record in DynamoDB.
 
  **POST /order/fulfilled** sends an email to `zppxxagv-producer@grr.la` from `zppxxagv-ordering-system@grr.la`, both emails must be validated in AWS. These emails were created on [guerrillamail.com](https://www.guerrillamail.com/inbox) and can be verified/viewed there.
 
